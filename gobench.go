@@ -15,6 +15,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+  "crypto/tls"
 
 	"github.com/valyala/fasthttp"
 )
@@ -30,6 +31,7 @@ var (
 	writeTimeout     int
 	readTimeout      int
 	authHeader       string
+  insecureSkipVerify bool
 )
 
 type Configuration struct {
@@ -83,7 +85,8 @@ func init() {
 	flag.IntVar(&clients, "c", 100, "Number of concurrent clients")
 	flag.StringVar(&url, "u", "", "URL")
 	flag.StringVar(&urlsFilePath, "f", "", "URL's file path (line seperated)")
-	flag.BoolVar(&keepAlive, "k", true, "Do HTTP keep-alive")
+	flag.BoolVar(&keepAlive, "k", false, "Do HTTP keep-alive")
+  flag.BoolVar(&insecureSkipVerify, "s", false, "Skip cert check")
 	flag.StringVar(&postDataFilePath, "d", "", "HTTP POST data file path")
 	flag.Int64Var(&period, "t", -1, "Period of time (in seconds)")
 	flag.IntVar(&writeTimeout, "tw", 5000, "Write timeout (in milliseconds)")
@@ -231,7 +234,7 @@ func NewConfiguration() *Configuration {
 	configuration.myClient.ReadTimeout = time.Duration(readTimeout) * time.Millisecond
 	configuration.myClient.WriteTimeout = time.Duration(writeTimeout) * time.Millisecond
 	configuration.myClient.MaxConnsPerHost = clients
-
+  configuration.myClient.TLSConfig = &tls.Config{ InsecureSkipVerify: insecureSkipVerify}
 	configuration.myClient.Dial = MyDialer()
 
 	return configuration
