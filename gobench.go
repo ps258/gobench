@@ -55,6 +55,12 @@ type Result struct {
   badFailed     int64
 }
 
+type resp struct {
+  status  int
+  latency int64
+  size    int
+}
+
 var readThroughput int64
 var writeThroughput int64
 
@@ -272,7 +278,10 @@ func MyDialer() func(address string) (conn net.Conn, err error) {
   }
 }
 
-func client(configuration *Configuration, result *Result, done *sync.WaitGroup) {
+func client(configuration *Configuration, result *Result, done *sync.WaitGroup, errChan chan error, respChan chan *resp) {
+
+  var err error
+  var size int
   for result.requests < configuration.requests {
     for _, tmpUrl := range configuration.urls {
 
@@ -293,12 +302,25 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup) 
 
       req.SetBody(configuration.postData)
 
-      resp := fasthttp.AcquireResponse()
-      err := configuration.myClient.Do(req, resp)
-      statusCode := resp.StatusCode()
+      res := fasthttp.AcquireResponse()
+      latency := time.Now()
+      if err = configuration.myClient.Do(req, res); err != nil {
+        errChan <- err
+      } else {
+        size = len(res.Body()) + 2
+        res.Header.VisitAll(func(key, value []byte) {
+          size += len(key) + len(value) + 2
+        })
+      }
+      respChan <- &resp{
+        status:  res.Header.StatusCode(),
+        latency: time.Now().Sub(latency).Milliseconds(),
+        size:    size,
+      }
+      statusCode := res.StatusCode()
       result.requests++
       fasthttp.ReleaseRequest(req)
-      fasthttp.ReleaseResponse(resp)
+      fasthttp.ReleaseResponse(res)
 
       if err != nil {
         result.networkFailed++
@@ -332,6 +354,9 @@ func main() {
 
   flag.Parse()
 
+  respChan := make(chan *resp, 2*clients)
+  errChan := make(chan error, 2*clients)
+
   configuration := NewConfiguration()
 
   goMaxProcs := os.Getenv("GOMAXPROCS")
@@ -346,10 +371,20 @@ func main() {
   for i := 0; i < clients; i++ {
     result := &Result{}
     results[i] = result
-    go client(configuration, result, &done)
+    go client(configuration, result, &done, errChan, respChan)
 
   }
   fmt.Println("Waiting for results...")
+  for {
+    select {
+      case err := <-errChan:
+        fmt.Println("Error: ", err.Error())
+      case res := <-respChan:
+        s := int64(res.size)
+        _ = s
+        fmt.Println("Result", res.size, " ", res.status, " ", res.latency)
+    }
+  }
   done.Wait()
   printResults(results, startTime)
 }
