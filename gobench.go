@@ -32,6 +32,8 @@ var (
   readTimeout      int
   authHeader       string
   insecureSkipVerify bool
+  mtlsCertFile     string
+  mtlsKeyFile      string
 )
 
 type Configuration struct {
@@ -87,6 +89,8 @@ func init() {
   flag.StringVar(&urlsFilePath, "f", "", "URL's file path (line seperated)")
   flag.BoolVar(&keepAlive, "k", false, "Do HTTP keep-alive")
   flag.BoolVar(&insecureSkipVerify, "s", false, "Skip cert check")
+  flag.StringVar(&mtlsCertFile, "x", "", "Certificate for MATLS")
+  flag.StringVar(&mtlsKeyFile, "y", "", "Key to certificate for MATLS")
   flag.StringVar(&postDataFilePath, "d", "", "HTTP POST data file path")
   flag.Int64Var(&period, "t", -1, "Period of time (in seconds)")
   flag.IntVar(&writeTimeout, "tw", 5000, "Write timeout (in milliseconds)")
@@ -172,6 +176,12 @@ func NewConfiguration() *Configuration {
     os.Exit(1)
   }
 
+  if (mtlsKeyFile != "" && mtlsCertFile == "") || (mtlsKeyFile == "" && mtlsCertFile != "") {
+    fmt.Println("Both cert and key must be specified if one is")
+    flag.Usage()
+    os.Exit(1)
+  }
+
   configuration := &Configuration{
     urls:       make([]string, 0),
     method:     "GET",
@@ -215,6 +225,16 @@ func NewConfiguration() *Configuration {
     configuration.urls = fileLines
   }
 
+  if mtlsCertFile != "" {
+    cert, err := tls.LoadX509KeyPair(mtlsCertFile, mtlsKeyFile)
+    if err != nil {
+      log.Fatal(err)
+    }
+    configuration.myClient.TLSConfig = &tls.Config{ Certificates: []tls.Certificate{cert}, InsecureSkipVerify: insecureSkipVerify }
+  } else {
+    configuration.myClient.TLSConfig = &tls.Config{ InsecureSkipVerify: insecureSkipVerify }
+  }
+
   if url != "" {
     configuration.urls = append(configuration.urls, url)
   }
@@ -234,7 +254,6 @@ func NewConfiguration() *Configuration {
   configuration.myClient.ReadTimeout = time.Duration(readTimeout) * time.Millisecond
   configuration.myClient.WriteTimeout = time.Duration(writeTimeout) * time.Millisecond
   configuration.myClient.MaxConnsPerHost = clients
-  configuration.myClient.TLSConfig = &tls.Config{ InsecureSkipVerify: insecureSkipVerify}
   configuration.myClient.Dial = MyDialer()
 
   return configuration
