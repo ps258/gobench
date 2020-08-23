@@ -18,6 +18,9 @@ import (
   "crypto/tls"
 
   "github.com/valyala/fasthttp"
+  "github.com/glentiki/hdrhistogram"
+  "github.com/olekukonko/tablewriter"
+  "github.com/ttacon/chalk"
 )
 
 var (
@@ -338,20 +341,16 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup, 
   done.Done()
 }
 
+
 func main() {
 
   startTime := time.Now()
   var done sync.WaitGroup
   results := make(map[int]*Result)
+  latencies := hdrhistogram.New(1, 10000, 5)
 
   signalChannel := make(chan os.Signal, 2)
   signal.Notify(signalChannel, os.Interrupt)
-  go func() {
-    _ = <-signalChannel
-    printResults(results, startTime)
-    os.Exit(0)
-  }()
-
   flag.Parse()
 
   respChan := make(chan *resp, 2*clients)
@@ -377,14 +376,52 @@ func main() {
   fmt.Println("Waiting for results...")
   for {
     select {
-      case err := <-errChan:
-        fmt.Println("Error: ", err.Error())
-      case res := <-respChan:
-        s := int64(res.size)
-        _ = s
-        fmt.Println("Result", res.size, " ", res.status, " ", res.latency)
+    case err := <-errChan:
+      fmt.Println("Error: ", err.Error())
+    case res := <-respChan:
+      if res.status >= 200 && res.status < 300 {
+        latencies.RecordValue(int64(res.latency))
+        //fmt.Println("size: ", res.size, " status:", res.status, " latency:", res.latency)
+      }
+    case _ = <-signalChannel:
+      printResults(results, startTime)
+      fmt.Println("")
+      shortLatency := tablewriter.NewWriter(os.Stdout)
+      shortLatency.SetRowSeparator("-")
+      shortLatency.SetHeader([]string{
+        "Stat",
+        "2.5%",
+        "50%",
+        "97.5%",
+        "99%",
+        "Avg",
+        "Stdev",
+        "Min",
+        "Max",
+      })
+      shortLatency.SetHeaderColor(tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor},
+        tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor},
+        tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor},
+        tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor},
+        tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor},
+        tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor},
+        tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor},
+        tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor},
+        tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor})
+      shortLatency.Append([]string{
+        chalk.Bold.TextStyle("Latency"),
+        fmt.Sprintf("%v ms", latencies.ValueAtPercentile(2.5)),
+        fmt.Sprintf("%v ms", latencies.ValueAtPercentile(50)),
+        fmt.Sprintf("%v ms", latencies.ValueAtPercentile(97.5)),
+        fmt.Sprintf("%v ms", latencies.ValueAtPercentile(99)),
+        fmt.Sprintf("%.2f ms", latencies.Mean()),
+        fmt.Sprintf("%.2f ms", latencies.StdDev()),
+        fmt.Sprintf("%v ms", latencies.Min()),
+        fmt.Sprintf("%v ms", latencies.Max()),
+      })
+      shortLatency.Render()
+      fmt.Println("")
+      os.Exit(0)
     }
   }
-  done.Wait()
-  printResults(results, startTime)
 }
