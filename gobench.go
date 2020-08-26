@@ -16,8 +16,9 @@ import (
   "sync/atomic"
   "time"
   "crypto/tls"
+  "net/http"
 
-  "github.com/valyala/fasthttp"
+  //"github.com/valyala/fasthttp"
   "github.com/glentiki/hdrhistogram"
   "github.com/olekukonko/tablewriter"
   "github.com/ttacon/chalk"
@@ -49,7 +50,7 @@ type Configuration struct {
   keepAlive  bool
   authHeader string
 
-  myClient fasthttp.Client
+  myClient *http.Client
 }
 
 type Result struct {
@@ -241,9 +242,11 @@ func NewConfiguration() *Configuration {
     if err != nil {
       log.Fatal(err)
     }
-    configuration.myClient.TLSConfig = &tls.Config{ Certificates: []tls.Certificate{cert}, InsecureSkipVerify: insecureSkipVerify }
+    // fasthttp configuration.myClient.TLSConfig = &tls.Config{ Certificates: []tls.Certificate{cert}, InsecureSkipVerify: insecureSkipVerify }
+    configuration.myClient = &http.Client{ Transport: &http.Transport{ TLSClientConfig: &tls.Config{ InsecureSkipVerify: insecureSkipVerify, Certificates: []tls.Certificate{cert}, }, }, }
   } else {
-    configuration.myClient.TLSConfig = &tls.Config{ InsecureSkipVerify: insecureSkipVerify }
+    configuration.myClient = &http.Client{ Transport: &http.Transport{ TLSClientConfig: &tls.Config{ InsecureSkipVerify: insecureSkipVerify, }, }, }
+    // fasthttp configuration.myClient.TLSConfig = &tls.Config{ InsecureSkipVerify: insecureSkipVerify }
   }
 
   if url != "" {
@@ -262,10 +265,15 @@ func NewConfiguration() *Configuration {
     configuration.postData = data
   }
 
+  /* fasthttp config
   configuration.myClient.ReadTimeout = time.Duration(readTimeout) * time.Millisecond
   configuration.myClient.WriteTimeout = time.Duration(writeTimeout) * time.Millisecond
   configuration.myClient.MaxConnsPerHost = clients
   configuration.myClient.Dial = MyDialer()
+  */
+
+  // net/http config
+  configuration.myClient.Timeout = time.Duration(readTimeout) * time.Millisecond
 
   return configuration
 }
@@ -285,54 +293,62 @@ func MyDialer() func(address string) (conn net.Conn, err error) {
 
 func client(configuration *Configuration, result *Result, done *sync.WaitGroup, errChan chan error, respChan chan *resp) {
 
-  var err error
   var size int
   for result.requests < configuration.requests {
     for _, tmpUrl := range configuration.urls {
 
+      /* fasthttp
       req := fasthttp.AcquireRequest()
-
       req.SetRequestURI(tmpUrl)
       req.Header.SetMethodBytes([]byte(configuration.method))
-
       if configuration.keepAlive == true {
         req.Header.Set("Connection", "keep-alive")
       } else {
         req.Header.Set("Connection", "close")
       }
-
+      if len(configuration.authHeader) > 0 {
+        req.Header.Set("Authorization", configuration.authHeader)
+      }
+      req.SetBody(configuration.postData)
+      res := fasthttp.AcquireResponse()
+      */
+      req, err := http.NewRequest(configuration.method, tmpUrl, nil)
+      if configuration.keepAlive == true {
+        req.Header.Set("Connection", "keep-alive")
+      } else {
+        req.Header.Set("Connection", "close")
+      }
       if len(configuration.authHeader) > 0 {
         req.Header.Set("Authorization", configuration.authHeader)
       }
 
-      req.SetBody(configuration.postData)
-
-      res := fasthttp.AcquireResponse()
       latency := time.Now()
-      if err = configuration.myClient.Do(req, res); err != nil {
+      // fasthttp if err = configuration.myClient.Do(req, res); err != nil {
+      res, err := configuration.myClient.Get(tmpUrl)
+      if err != nil {
         errChan <- err
       } else {
-        size = len(res.Body()) + 2
-        res.Header.VisitAll(func(key, value []byte) {
+        defer res.Body.Close()
+        body, _ := ioutil.ReadAll(res.Body)
+        size = len(body) + 2
+        for key, value := range res.Header {
           size += len(key) + len(value) + 2
-        })
+        }
       }
       respChan <- &resp{
-        status:  res.Header.StatusCode(),
+        status:  res.StatusCode,
         latency: time.Now().Sub(latency).Milliseconds(),
         size:    size,
       }
-      statusCode := res.StatusCode()
+      statusCode := res.StatusCode
       result.requests++
-      fasthttp.ReleaseRequest(req)
-      fasthttp.ReleaseResponse(res)
 
       if err != nil {
         result.networkFailed++
         continue
       }
 
-      if statusCode == fasthttp.StatusOK {
+      if statusCode >= 200 && statusCode < 300 {
         result.success++
       } else {
         result.badFailed++
