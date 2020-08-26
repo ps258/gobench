@@ -37,6 +37,7 @@ var (
   insecureSkipVerify bool
   mtlsCertFile     string
   mtlsKeyFile      string
+  trackMaxLatency  bool
 )
 
 type Configuration struct {
@@ -100,6 +101,7 @@ func init() {
   flag.BoolVar(&insecureSkipVerify, "s", false, "Skip cert check")
   flag.StringVar(&mtlsCertFile, "x", "", "Certificate for MATLS")
   flag.StringVar(&mtlsKeyFile, "y", "", "Key to certificate for MATLS")
+  flag.BoolVar(&trackMaxLatency, "m", false, "Track and report the maximum latency as it occurs")
   flag.StringVar(&postDataFilePath, "d", "", "HTTP POST data file path")
   flag.Int64Var(&period, "t", -1, "Period of time (in seconds)")
   flag.IntVar(&writeTimeout, "tw", 5000, "Write timeout (in milliseconds)")
@@ -346,6 +348,10 @@ func main() {
 
   startTime := time.Now()
   var done sync.WaitGroup
+  var maxLatency int64
+  var messageCount int64
+  maxLatency = -1
+  messageCount = 0
   results := make(map[int]*Result)
   latencies := hdrhistogram.New(1, 10000, 5)
 
@@ -380,8 +386,14 @@ func main() {
       fmt.Println("Error: ", err.Error())
     case res := <-respChan:
       if res.status >= 200 && res.status < 300 {
+        messageCount++
         latencies.RecordValue(int64(res.latency))
-        //fmt.Println("size: ", res.size, " status:", res.status, " latency:", res.latency)
+        if trackMaxLatency {
+          if maxLatency < 0 || res.latency > maxLatency {
+            maxLatency = res.latency
+            fmt.Println(messageCount, " size: ", res.size, " status:", res.status, " latency:", res.latency)
+          }
+        }
       }
     case _ = <-signalChannel:
       printResults(results, startTime)
