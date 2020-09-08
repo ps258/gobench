@@ -12,6 +12,7 @@ Differences
 Usage
 ================
 
+```
 Usage of gobench
   -auth string
         Authorization header
@@ -38,6 +39,7 @@ Usage of gobench
         Certificate for MATLS
   -y string
         Key to certificate for MATLS
+```
 
 
 Notes
