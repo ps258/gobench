@@ -21,6 +21,7 @@ import (
   "github.com/glentiki/hdrhistogram"
   "github.com/olekukonko/tablewriter"
   "github.com/ttacon/chalk"
+  //"github.com/guptarohit/asciigraph"
 )
 
 var (
@@ -433,6 +434,18 @@ func main() {
       })
       shortLatency.Render()
       fmt.Println("")
+      // An attempt at visualisation which failed!
+/*
+      var data []float64
+      bars := latencies.Distribution()
+      for bar := range bars {
+        //fmt.Println(bars[bar].Count)
+        data = append(data, float64(bars[bar].Count))
+      }
+      //fmt.Println(latencies.Distribution())
+      graph := asciigraph.Plot(data, asciigraph.Height(100), asciigraph.Width(200))
+      fmt.Println(graph)
+*/
       os.Exit(0)
     }
   }
