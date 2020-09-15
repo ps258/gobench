@@ -36,9 +36,9 @@ Usage of gobench
   -u string
         URL
   -x string
-        Certificate for MATLS
+        File name of certificate for MATLS
   -y string
-        Key to certificate for MATLS
+        File name of key to certificate for MATLS
 ```
 
 
