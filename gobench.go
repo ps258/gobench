@@ -9,6 +9,8 @@ import (
   "io/ioutil"
   "log"
   "net"
+  "net/http"
+  "net/url"
   "os"
   "os/signal"
   "runtime"
@@ -16,7 +18,6 @@ import (
   "sync/atomic"
   "time"
   "crypto/tls"
-  "net/http"
 
   //"github.com/valyala/fasthttp"
   "github.com/glentiki/hdrhistogram"
@@ -28,7 +29,7 @@ var (
   requests         int64
   period           int64
   clients          int
-  url              string
+  targetURL        string
   urlsFilePath     string
   keepAlive        bool
   postDataFilePath string
@@ -96,7 +97,7 @@ func (this *MyConn) Write(b []byte) (n int, err error) {
 func init() {
   flag.Int64Var(&requests, "r", -1, "Number of requests per client")
   flag.IntVar(&clients, "c", 100, "Number of concurrent clients")
-  flag.StringVar(&url, "u", "", "URL")
+  flag.StringVar(&targetURL, "u", "", "URL")
   flag.StringVar(&urlsFilePath, "f", "", "URL's file path (line seperated)")
   flag.BoolVar(&keepAlive, "k", false, "Do HTTP keep-alive")
   flag.BoolVar(&insecureSkipVerify, "s", false, "Skip cert check")
@@ -171,7 +172,7 @@ func readLines(path string) (lines []string, err error) {
 
 func NewConfiguration() *Configuration {
 
-  if urlsFilePath == "" && url == "" {
+  if urlsFilePath == "" && targetURL == "" {
     flag.Usage()
     os.Exit(1)
   }
@@ -237,20 +238,30 @@ func NewConfiguration() *Configuration {
     configuration.urls = fileLines
   }
 
+  d := MyDialer()
+  f := func(network string, addr string) (net.Conn, error) {
+    return d(targetURL)
+  }
+
   if mtlsCertFile != "" {
     cert, err := tls.LoadX509KeyPair(mtlsCertFile, mtlsKeyFile)
     if err != nil {
       log.Fatal(err)
     }
     // fasthttp configuration.myClient.TLSConfig = &tls.Config{ Certificates: []tls.Certificate{cert}, InsecureSkipVerify: insecureSkipVerify }
-    configuration.myClient = &http.Client{ Transport: &http.Transport{ TLSClientConfig: &tls.Config{ InsecureSkipVerify: insecureSkipVerify, Certificates: []tls.Certificate{cert}, }, }, }
+    configuration.myClient = &http.Client{ Transport: &http.Transport{
+        Dial:            f,
+        TLSClientConfig: &tls.Config{ InsecureSkipVerify: insecureSkipVerify, Certificates: []tls.Certificate{cert},},
+      }, }
   } else {
-    configuration.myClient = &http.Client{ Transport: &http.Transport{ TLSClientConfig: &tls.Config{ InsecureSkipVerify: insecureSkipVerify, }, }, }
+    configuration.myClient = &http.Client{ Transport: &http.Transport{
+        Dial:            f,
+        TLSClientConfig: &tls.Config{ InsecureSkipVerify: insecureSkipVerify, }, }, }
     // fasthttp configuration.myClient.TLSConfig = &tls.Config{ InsecureSkipVerify: insecureSkipVerify }
   }
 
-  if url != "" {
-    configuration.urls = append(configuration.urls, url)
+  if targetURL != "" {
+    configuration.urls = append(configuration.urls, targetURL)
   }
 
   if postDataFilePath != "" {
@@ -278,9 +289,31 @@ func NewConfiguration() *Configuration {
   return configuration
 }
 
+func parseAddress(address string) string {
+  // parses address 
+  u, err := url.Parse(address)
+  if err != nil {
+    log.Fatal(err)
+  }
+  if "" == u.Port() {
+    switch scheme := u.Scheme; scheme {
+      case "https":
+        u.Host = u.Host + ":443"
+      case "http":
+        u.Host = u.Host + ":80"
+      default:
+        log.Fatal("Unable to decode scheme ", u.Scheme)
+    }
+  }
+  //fmt.Println("Host = ", u.Host, ", Port = ", u.Port(), ", scheme = ", u.Scheme)
+  return u.Host
+}
+
 func MyDialer() func(address string) (conn net.Conn, err error) {
   return func(address string) (net.Conn, error) {
+    address = parseAddress(address)
     conn, err := net.Dial("tcp", address)
+    //conn, err := net.Dial("tcp", "httpbin.org:443")
     if err != nil {
       return nil, err
     }
@@ -327,18 +360,31 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup, 
       res, err := configuration.myClient.Get(tmpUrl)
       if err != nil {
         errChan <- err
+        respChan <- &resp{
+          status:  res.StatusCode,
+          latency: time.Now().Sub(latency).Milliseconds(),
+          size:    0,
+        }
       } else {
         defer res.Body.Close()
         body, _ := ioutil.ReadAll(res.Body)
+        //fmt.Println("body = ", string(body), " = ", len(body) + 2)
         size = len(body) + 2
         for key, value := range res.Header {
-          size += len(key) + len(value) + 2
+          //fmt.Print("H ", key, ": ", len(key),  " -> ", value, ": ", len(value))
+          for _, s := range value {
+            //fmt.Print(" str ", s, " ", len(s))
+            size += len(s) + 2
+          }
+          //fmt.Println()
+          size += len(key) + 2
         }
-      }
-      respChan <- &resp{
-        status:  res.StatusCode,
-        latency: time.Now().Sub(latency).Milliseconds(),
-        size:    size,
+        //fmt.Println("size = ", size)
+        respChan <- &resp{
+          status:  res.StatusCode,
+          latency: time.Now().Sub(latency).Milliseconds(),
+          size:    size,
+        }
       }
       statusCode := res.StatusCode
       result.requests++
