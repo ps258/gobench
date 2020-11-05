@@ -40,6 +40,8 @@ var (
   mtlsCertFile     string
   mtlsKeyFile      string
   trackMaxLatency  bool
+  hostHeader       string
+  dumpResponse     bool
 )
 
 type Configuration struct {
@@ -109,6 +111,8 @@ func init() {
   flag.IntVar(&writeTimeout, "tw", 5000, "Write timeout (in milliseconds)")
   flag.IntVar(&readTimeout, "tr", 5000, "Read timeout (in milliseconds)")
   flag.StringVar(&authHeader, "auth", "", "Authorization header")
+  flag.StringVar(&hostHeader, "host", "", "Host header to use (indepedant of URL)")
+  flag.BoolVar(&dumpResponse, "dump", false, "Dump a bunch of replies")
 }
 
 func printResults(results map[int]*Result, startTime time.Time) {
@@ -330,21 +334,6 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup, 
   for result.requests < configuration.requests {
     for _, tmpUrl := range configuration.urls {
 
-      /* fasthttp
-      req := fasthttp.AcquireRequest()
-      req.SetRequestURI(tmpUrl)
-      req.Header.SetMethodBytes([]byte(configuration.method))
-      if configuration.keepAlive == true {
-        req.Header.Set("Connection", "keep-alive")
-      } else {
-        req.Header.Set("Connection", "close")
-      }
-      if len(configuration.authHeader) > 0 {
-        req.Header.Set("Authorization", configuration.authHeader)
-      }
-      req.SetBody(configuration.postData)
-      res := fasthttp.AcquireResponse()
-      */
       req, err := http.NewRequest(configuration.method, tmpUrl, nil)
       if configuration.keepAlive == true {
         req.Header.Set("Connection", "keep-alive")
@@ -354,9 +343,11 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup, 
       if len(configuration.authHeader) > 0 {
         req.Header.Set("Authorization", configuration.authHeader)
       }
+      if &hostHeader != nil {
+        req.Host = hostHeader
+      }
 
       latency := time.Now()
-      // fasthttp if err = configuration.myClient.Do(req, res); err != nil {
       res, err := configuration.myClient.Get(tmpUrl)
       if err != nil {
         errChan <- err
@@ -368,7 +359,12 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup, 
       } else {
         defer res.Body.Close()
         body, _ := ioutil.ReadAll(res.Body)
-        //fmt.Println("body = ", string(body), " = ", len(body) + 2)
+        if dumpResponse {
+          // This has a race condition and you might get more than one reply, but its really only 
+          // here so that it's possible to see some output from upstream so I don't really care
+          fmt.Println(string(body))
+          dumpResponse = false
+        }
         size = len(body) + 2
         for key, value := range res.Header {
           //fmt.Print("H ", key, ": ", len(key),  " -> ", value, ": ", len(value))
