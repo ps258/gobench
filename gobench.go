@@ -19,7 +19,6 @@ import (
   "time"
   "crypto/tls"
 
-  //"github.com/valyala/fasthttp"
   "github.com/glentiki/hdrhistogram"
   "github.com/olekukonko/tablewriter"
   "github.com/ttacon/chalk"
@@ -252,16 +251,20 @@ func NewConfiguration() *Configuration {
     if err != nil {
       log.Fatal(err)
     }
-    // fasthttp configuration.myClient.TLSConfig = &tls.Config{ Certificates: []tls.Certificate{cert}, InsecureSkipVerify: insecureSkipVerify }
     configuration.myClient = &http.Client{ Transport: &http.Transport{
         Dial:            f,
+        // huge (times 10) performance improvement
+        MaxIdleConnsPerHost: clients,
+        MaxIdleConns: 100,
         TLSClientConfig: &tls.Config{ InsecureSkipVerify: insecureSkipVerify, Certificates: []tls.Certificate{cert},},
       }, }
   } else {
     configuration.myClient = &http.Client{ Transport: &http.Transport{
         Dial:            f,
+        // huge (times 10) performance improvement
+        MaxIdleConnsPerHost: clients,
+        MaxIdleConns: 100,
         TLSClientConfig: &tls.Config{ InsecureSkipVerify: insecureSkipVerify, }, }, }
-    // fasthttp configuration.myClient.TLSConfig = &tls.Config{ InsecureSkipVerify: insecureSkipVerify }
   }
 
   if targetURL != "" {
@@ -280,21 +283,12 @@ func NewConfiguration() *Configuration {
     configuration.postData = data
   }
 
-  /* fasthttp config
-  configuration.myClient.ReadTimeout = time.Duration(readTimeout) * time.Millisecond
-  configuration.myClient.WriteTimeout = time.Duration(writeTimeout) * time.Millisecond
-  configuration.myClient.MaxConnsPerHost = clients
-  configuration.myClient.Dial = MyDialer()
-  */
-
-  // net/http config
   configuration.myClient.Timeout = time.Duration(readTimeout) * time.Millisecond
 
   return configuration
 }
 
 func parseAddress(address string) string {
-  // parses address 
   u, err := url.Parse(address)
   if err != nil {
     log.Fatal(err)
@@ -309,7 +303,6 @@ func parseAddress(address string) string {
         log.Fatal("Unable to decode scheme ", u.Scheme)
     }
   }
-  //fmt.Println("Host = ", u.Host, ", Port = ", u.Port(), ", scheme = ", u.Scheme)
   return u.Host
 }
 
@@ -317,7 +310,6 @@ func MyDialer() func(address string) (conn net.Conn, err error) {
   return func(address string) (net.Conn, error) {
     address = parseAddress(address)
     conn, err := net.Dial("tcp", address)
-    //conn, err := net.Dial("tcp", "httpbin.org:443")
     if err != nil {
       return nil, err
     }
@@ -331,6 +323,8 @@ func MyDialer() func(address string) (conn net.Conn, err error) {
 func client(configuration *Configuration, result *Result, done *sync.WaitGroup, errChan chan error, respChan chan *resp) {
 
   var size int
+  var statusCode int
+  //http.DefaultTransport.(*http.Transport).MaxIdleConnsPerHost = 100
   for result.requests < configuration.requests {
     for _, tmpUrl := range configuration.urls {
 
@@ -352,10 +346,11 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup, 
       if err != nil {
         errChan <- err
         respChan <- &resp{
-          status:  res.StatusCode,
+          status:  0,
           latency: time.Now().Sub(latency).Milliseconds(),
           size:    0,
         }
+        statusCode = 0
       } else {
         defer res.Body.Close()
         body, _ := ioutil.ReadAll(res.Body)
@@ -367,22 +362,18 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup, 
         }
         size = len(body) + 2
         for key, value := range res.Header {
-          //fmt.Print("H ", key, ": ", len(key),  " -> ", value, ": ", len(value))
           for _, s := range value {
-            //fmt.Print(" str ", s, " ", len(s))
             size += len(s) + 2
           }
-          //fmt.Println()
           size += len(key) + 2
         }
-        //fmt.Println("size = ", size)
         respChan <- &resp{
           status:  res.StatusCode,
           latency: time.Now().Sub(latency).Milliseconds(),
           size:    size,
         }
+        statusCode = res.StatusCode
       }
-      statusCode := res.StatusCode
       result.requests++
 
       if err != nil {
