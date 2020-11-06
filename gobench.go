@@ -440,13 +440,13 @@ func main() {
         if trackMaxLatency {
           if maxLatency < 0 || res.latency > maxLatency {
             maxLatency = res.latency
-            fmt.Println(messageCount, " size: ", res.size, " status:", res.status, " latency:", res.latency)
+            fmt.Println("MaxLatency: message# ", messageCount, " size: ", res.size, "B status:", res.status, " latency:", res.latency, "ms")
           }
         }
       }
     case body := <-dumpChan:
       if dumpCount > 0 {
-        fmt.Println(dumpCount, ": ", body)
+        fmt.Println("Dump: ", dumpCount, ": ", body)
         dumpCount--
       } else {
         dumpResponse = false
@@ -489,18 +489,7 @@ func main() {
       })
       shortLatency.Render()
       fmt.Println("")
-      // An attempt at visualisation which failed!
-/*
-      var data []float64
-      bars := latencies.Distribution()
-      for bar := range bars {
-        //fmt.Println(bars[bar].Count)
-        data = append(data, float64(bars[bar].Count))
-      }
-      //fmt.Println(latencies.Distribution())
-      graph := asciigraph.Plot(data, asciigraph.Height(100), asciigraph.Width(200))
-      fmt.Println(graph)
-*/
+
       os.Exit(0)
     }
   }
