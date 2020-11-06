@@ -9,6 +9,8 @@ import (
   "io/ioutil"
   "log"
   "net"
+  "net/http"
+  "net/url"
   "os"
   "os/signal"
   "runtime"
@@ -17,7 +19,6 @@ import (
   "time"
   "crypto/tls"
 
-  "github.com/valyala/fasthttp"
   "github.com/glentiki/hdrhistogram"
   "github.com/olekukonko/tablewriter"
   "github.com/ttacon/chalk"
@@ -28,7 +29,7 @@ var (
   requests         int64
   period           int64
   clients          int
-  url              string
+  targetURL        string
   urlsFilePath     string
   keepAlive        bool
   postDataFilePath string
@@ -39,6 +40,8 @@ var (
   mtlsCertFile     string
   mtlsKeyFile      string
   trackMaxLatency  bool
+  hostHeader       string
+  dumpResponse     bool
 )
 
 type Configuration struct {
@@ -50,7 +53,7 @@ type Configuration struct {
   keepAlive  bool
   authHeader string
 
-  myClient fasthttp.Client
+  myClient *http.Client
 }
 
 type Result struct {
@@ -96,7 +99,7 @@ func (this *MyConn) Write(b []byte) (n int, err error) {
 func init() {
   flag.Int64Var(&requests, "r", -1, "Number of requests per client")
   flag.IntVar(&clients, "c", 100, "Number of concurrent clients")
-  flag.StringVar(&url, "u", "", "URL")
+  flag.StringVar(&targetURL, "u", "", "URL")
   flag.StringVar(&urlsFilePath, "f", "", "URL's file path (line seperated)")
   flag.BoolVar(&keepAlive, "k", false, "Do HTTP keep-alive")
   flag.BoolVar(&insecureSkipVerify, "s", false, "Skip cert check")
@@ -108,6 +111,8 @@ func init() {
   flag.IntVar(&writeTimeout, "tw", 5000, "Write timeout (in milliseconds)")
   flag.IntVar(&readTimeout, "tr", 5000, "Read timeout (in milliseconds)")
   flag.StringVar(&authHeader, "auth", "", "Authorization header")
+  flag.StringVar(&hostHeader, "host", "", "Host header to use (indepedant of URL)")
+  flag.BoolVar(&dumpResponse, "dump", false, "Dump a bunch of replies")
 }
 
 func printResults(results map[int]*Result, startTime time.Time) {
@@ -171,7 +176,7 @@ func readLines(path string) (lines []string, err error) {
 
 func NewConfiguration() *Configuration {
 
-  if urlsFilePath == "" && url == "" {
+  if urlsFilePath == "" && targetURL == "" {
     flag.Usage()
     os.Exit(1)
   }
@@ -237,18 +242,34 @@ func NewConfiguration() *Configuration {
     configuration.urls = fileLines
   }
 
+  d := MyDialer()
+  f := func(network string, addr string) (net.Conn, error) {
+    return d(targetURL)
+  }
+
   if mtlsCertFile != "" {
     cert, err := tls.LoadX509KeyPair(mtlsCertFile, mtlsKeyFile)
     if err != nil {
       log.Fatal(err)
     }
-    configuration.myClient.TLSConfig = &tls.Config{ Certificates: []tls.Certificate{cert}, InsecureSkipVerify: insecureSkipVerify }
+    configuration.myClient = &http.Client{ Transport: &http.Transport{
+        Dial:            f,
+        // huge (times 10) performance improvement
+        MaxIdleConnsPerHost: clients,
+        MaxIdleConns: 100,
+        TLSClientConfig: &tls.Config{ InsecureSkipVerify: insecureSkipVerify, Certificates: []tls.Certificate{cert},},
+      }, }
   } else {
-    configuration.myClient.TLSConfig = &tls.Config{ InsecureSkipVerify: insecureSkipVerify }
+    configuration.myClient = &http.Client{ Transport: &http.Transport{
+        Dial:            f,
+        // huge (times 10) performance improvement
+        MaxIdleConnsPerHost: clients,
+        MaxIdleConns: 100,
+        TLSClientConfig: &tls.Config{ InsecureSkipVerify: insecureSkipVerify, }, }, }
   }
 
-  if url != "" {
-    configuration.urls = append(configuration.urls, url)
+  if targetURL != "" {
+    configuration.urls = append(configuration.urls, targetURL)
   }
 
   if postDataFilePath != "" {
@@ -263,16 +284,32 @@ func NewConfiguration() *Configuration {
     configuration.postData = data
   }
 
-  configuration.myClient.ReadTimeout = time.Duration(readTimeout) * time.Millisecond
-  configuration.myClient.WriteTimeout = time.Duration(writeTimeout) * time.Millisecond
-  configuration.myClient.MaxConnsPerHost = clients
-  configuration.myClient.Dial = MyDialer()
+  configuration.myClient.Timeout = time.Duration(readTimeout) * time.Millisecond
 
   return configuration
 }
 
+func parseAddress(address string) string {
+  u, err := url.Parse(address)
+  if err != nil {
+    log.Fatal(err)
+  }
+  if "" == u.Port() {
+    switch scheme := u.Scheme; scheme {
+      case "https":
+        u.Host = u.Host + ":443"
+      case "http":
+        u.Host = u.Host + ":80"
+      default:
+        log.Fatal("Unable to decode scheme ", u.Scheme)
+    }
+  }
+  return u.Host
+}
+
 func MyDialer() func(address string) (conn net.Conn, err error) {
   return func(address string) (net.Conn, error) {
+    address = parseAddress(address)
     conn, err := net.Dial("tcp", address)
     if err != nil {
       return nil, err
@@ -284,56 +321,65 @@ func MyDialer() func(address string) (conn net.Conn, err error) {
   }
 }
 
-func client(configuration *Configuration, result *Result, done *sync.WaitGroup, errChan chan error, respChan chan *resp) {
+func client(configuration *Configuration, result *Result, done *sync.WaitGroup, errChan chan error, respChan chan *resp, dumpChan chan string) {
 
-  var err error
   var size int
+  var statusCode int
+  //http.DefaultTransport.(*http.Transport).MaxIdleConnsPerHost = 100
   for result.requests < configuration.requests {
     for _, tmpUrl := range configuration.urls {
 
-      req := fasthttp.AcquireRequest()
-
-      req.SetRequestURI(tmpUrl)
-      req.Header.SetMethodBytes([]byte(configuration.method))
-
+      req, err := http.NewRequest(configuration.method, tmpUrl, nil)
       if configuration.keepAlive == true {
         req.Header.Set("Connection", "keep-alive")
       } else {
         req.Header.Set("Connection", "close")
       }
-
       if len(configuration.authHeader) > 0 {
         req.Header.Set("Authorization", configuration.authHeader)
       }
+      if &hostHeader != nil {
+        req.Host = hostHeader
+      }
 
-      req.SetBody(configuration.postData)
-
-      res := fasthttp.AcquireResponse()
       latency := time.Now()
-      if err = configuration.myClient.Do(req, res); err != nil {
+      res, err := configuration.myClient.Get(tmpUrl)
+      if err != nil {
         errChan <- err
+        respChan <- &resp{
+          status:  0,
+          latency: time.Now().Sub(latency).Milliseconds(),
+          size:    0,
+        }
+        statusCode = 0
       } else {
-        size = len(res.Body()) + 2
-        res.Header.VisitAll(func(key, value []byte) {
-          size += len(key) + len(value) + 2
-        })
+        defer res.Body.Close()
+        body, _ := ioutil.ReadAll(res.Body)
+        if dumpResponse {
+          dumpChan <- string(body)
+        }
+        size = len(body) + 2
+        for key, value := range res.Header {
+          for _, s := range value {
+            size += len(s) + 2
+          }
+          size += len(key) + 2
+        }
+        respChan <- &resp{
+          status:  res.StatusCode,
+          latency: time.Now().Sub(latency).Milliseconds(),
+          size:    size,
+        }
+        statusCode = res.StatusCode
       }
-      respChan <- &resp{
-        status:  res.Header.StatusCode(),
-        latency: time.Now().Sub(latency).Milliseconds(),
-        size:    size,
-      }
-      statusCode := res.StatusCode()
       result.requests++
-      fasthttp.ReleaseRequest(req)
-      fasthttp.ReleaseResponse(res)
 
       if err != nil {
         result.networkFailed++
         continue
       }
 
-      if statusCode == fasthttp.StatusOK {
+      if statusCode >= 200 && statusCode < 300 {
         result.success++
       } else {
         result.badFailed++
@@ -351,6 +397,7 @@ func main() {
   var done sync.WaitGroup
   var maxLatency int64
   var messageCount int64
+  var dumpCount = 5
   maxLatency = -1
   messageCount = 0
   results := make(map[int]*Result)
@@ -362,6 +409,7 @@ func main() {
 
   respChan := make(chan *resp, 2*clients)
   errChan := make(chan error, 2*clients)
+  dumpChan := make(chan string, 2*clients)
 
   configuration := NewConfiguration()
 
@@ -377,7 +425,7 @@ func main() {
   for i := 0; i < clients; i++ {
     result := &Result{}
     results[i] = result
-    go client(configuration, result, &done, errChan, respChan)
+    go client(configuration, result, &done, errChan, respChan, dumpChan)
 
   }
   fmt.Println("Waiting for results...")
@@ -395,6 +443,13 @@ func main() {
             fmt.Println(messageCount, " size: ", res.size, " status:", res.status, " latency:", res.latency)
           }
         }
+      }
+    case body := <-dumpChan:
+      if dumpCount > 0 {
+        fmt.Println(dumpCount, ": ", body)
+        dumpCount--
+      } else {
+        dumpResponse = false
       }
     case _ = <-signalChannel:
       printResults(results, startTime)
