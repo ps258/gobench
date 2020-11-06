@@ -320,7 +320,7 @@ func MyDialer() func(address string) (conn net.Conn, err error) {
   }
 }
 
-func client(configuration *Configuration, result *Result, done *sync.WaitGroup, errChan chan error, respChan chan *resp) {
+func client(configuration *Configuration, result *Result, done *sync.WaitGroup, errChan chan error, respChan chan *resp, dumpChan chan string) {
 
   var size int
   var statusCode int
@@ -355,10 +355,7 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup, 
         defer res.Body.Close()
         body, _ := ioutil.ReadAll(res.Body)
         if dumpResponse {
-          // This has a race condition and you might get more than one reply, but its really only 
-          // here so that it's possible to see some output from upstream so I don't really care
-          fmt.Println(string(body))
-          dumpResponse = false
+          dumpChan <- string(body)
         }
         size = len(body) + 2
         for key, value := range res.Header {
@@ -399,6 +396,7 @@ func main() {
   var done sync.WaitGroup
   var maxLatency int64
   var messageCount int64
+  var dumpCount = 5
   maxLatency = -1
   messageCount = 0
   results := make(map[int]*Result)
@@ -410,6 +408,7 @@ func main() {
 
   respChan := make(chan *resp, 2*clients)
   errChan := make(chan error, 2*clients)
+  dumpChan := make(chan string, 2*clients)
 
   configuration := NewConfiguration()
 
@@ -425,7 +424,7 @@ func main() {
   for i := 0; i < clients; i++ {
     result := &Result{}
     results[i] = result
-    go client(configuration, result, &done, errChan, respChan)
+    go client(configuration, result, &done, errChan, respChan, dumpChan)
 
   }
   fmt.Println("Waiting for results...")
@@ -443,6 +442,13 @@ func main() {
             fmt.Println(messageCount, " size: ", res.size, " status:", res.status, " latency:", res.latency)
           }
         }
+      }
+    case body := <-dumpChan:
+      if dumpCount > 0 {
+        fmt.Println(dumpCount, ": ", body)
+        dumpCount--
+      } else {
+        dumpResponse = false
       }
     case _ = <-signalChannel:
       printResults(results, startTime)
