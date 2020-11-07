@@ -41,6 +41,7 @@ var (
   mtlsKeyFile      string
   trackMaxLatency  bool
   hostHeader       string
+  resolve          string
   dumpResponse     bool
 )
 
@@ -99,7 +100,7 @@ func (this *MyConn) Write(b []byte) (n int, err error) {
 func init() {
   flag.Int64Var(&requests, "r", -1, "Number of requests per client")
   flag.IntVar(&clients, "c", 100, "Number of concurrent clients")
-  flag.StringVar(&targetURL, "u", "", "URL")
+  flag.StringVar(&targetURL, "u", "", "URL. Incompatible with -f")
   flag.StringVar(&urlsFilePath, "f", "", "URL's file path (line seperated)")
   flag.BoolVar(&keepAlive, "k", false, "Do HTTP keep-alive")
   flag.BoolVar(&insecureSkipVerify, "s", false, "Skip cert check")
@@ -110,8 +111,9 @@ func init() {
   flag.Int64Var(&period, "t", -1, "Period of time (in seconds)")
   flag.IntVar(&writeTimeout, "tw", 5000, "Write timeout (in milliseconds)")
   flag.IntVar(&readTimeout, "tr", 5000, "Read timeout (in milliseconds)")
-  flag.StringVar(&authHeader, "auth", "", "Authorization header")
-  flag.StringVar(&hostHeader, "host", "", "Host header to use (indepedant of URL)")
+  flag.StringVar(&authHeader, "auth", "", "Authorization header. Incompatible with -f")
+  flag.StringVar(&hostHeader, "host", "", "Host header to use (independent of URL). Incompatible with -f")
+  flag.StringVar(&resolve, "resolve", "", "Resolve. Like -resolve in curl. Used for the CN/SAN match in a cert. Incompatible with -f")
   flag.BoolVar(&dumpResponse, "dump", false, "Dump a bunch of replies")
 }
 
@@ -181,6 +183,11 @@ func NewConfiguration() *Configuration {
     os.Exit(1)
   }
 
+  if urlsFilePath != "" && ( hostHeader != "" || targetURL != "" || authHeader != "" || resolve != "" ) {
+    flag.Usage()
+    os.Exit(1)
+  }
+
   if requests == -1 && period == -1 {
     fmt.Println("Requests or period must be provided")
     flag.Usage()
@@ -242,9 +249,14 @@ func NewConfiguration() *Configuration {
     configuration.urls = fileLines
   }
 
-  d := MyDialer()
-  f := func(network string, addr string) (net.Conn, error) {
-    return d(targetURL)
+  dialer := MyDialer()
+  dialFunction := func(network string, addr string) (net.Conn, error) {
+    return dialer(targetURL)
+  }
+
+  serverAccessName := parseAddress(targetURL)
+  if resolve != "" {
+    serverAccessName = resolve
   }
 
   if mtlsCertFile != "" {
@@ -253,19 +265,29 @@ func NewConfiguration() *Configuration {
       log.Fatal(err)
     }
     configuration.myClient = &http.Client{ Transport: &http.Transport{
-        Dial:            f,
-        // huge (times 10) performance improvement
+        Dial: dialFunction,
+        // huge (times 10) performance improvement when MaxIdleConnsPerHost and MaxIdleConns are configured
         MaxIdleConnsPerHost: clients,
         MaxIdleConns: 100,
-        TLSClientConfig: &tls.Config{ InsecureSkipVerify: insecureSkipVerify, Certificates: []tls.Certificate{cert},},
-      }, }
+        TLSClientConfig: &tls.Config{
+          ServerName: serverAccessName,
+          InsecureSkipVerify: insecureSkipVerify,
+          Certificates: []tls.Certificate{cert},
+        },
+      },
+    }
   } else {
     configuration.myClient = &http.Client{ Transport: &http.Transport{
-        Dial:            f,
-        // huge (times 10) performance improvement
+        Dial: dialFunction,
+        // huge (times 10) performance improvement when MaxIdleConnsPerHost and MaxIdleConns are configured
         MaxIdleConnsPerHost: clients,
         MaxIdleConns: 100,
-        TLSClientConfig: &tls.Config{ InsecureSkipVerify: insecureSkipVerify, }, }, }
+        TLSClientConfig: &tls.Config{
+          ServerName: serverAccessName,
+          InsecureSkipVerify: insecureSkipVerify,
+        },
+      },
+    }
   }
 
   if targetURL != "" {
@@ -325,7 +347,6 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup, 
 
   var size int
   var statusCode int
-  //http.DefaultTransport.(*http.Transport).MaxIdleConnsPerHost = 100
   for result.requests < configuration.requests {
     for _, tmpUrl := range configuration.urls {
 
