@@ -14,7 +14,6 @@ import (
   "os"
   "os/signal"
   "runtime"
-  "sync"
   "sync/atomic"
   "time"
   "crypto/tls"
@@ -22,7 +21,6 @@ import (
   "github.com/glentiki/hdrhistogram"
   "github.com/olekukonko/tablewriter"
   "github.com/ttacon/chalk"
-  //"github.com/guptarohit/asciigraph"
 )
 
 var (
@@ -130,10 +128,10 @@ func printResults(results map[int]*Result, startTime time.Time) {
     badFailed += result.badFailed
   }
 
-  elapsed := int64(time.Since(startTime).Seconds())
+  elapsed := float32(time.Since(startTime).Milliseconds())
 
-  if elapsed == 0 {
-    elapsed = 1
+  if elapsed == 0.0 {
+    elapsed = 1.0
   }
 
   fmt.Println()
@@ -141,10 +139,51 @@ func printResults(results map[int]*Result, startTime time.Time) {
   fmt.Printf("Successful requests:            %10d hits\n", success)
   fmt.Printf("Network failed:                 %10d hits\n", networkFailed)
   fmt.Printf("Bad requests failed (!2xx):     %10d hits\n", badFailed)
-  fmt.Printf("Successful requests rate:       %10d hits/sec\n", success/elapsed)
-  fmt.Printf("Read throughput:                %10d bytes/sec\n", readThroughput/elapsed)
-  fmt.Printf("Write throughput:               %10d bytes/sec\n", writeThroughput/elapsed)
-  fmt.Printf("Test time:                      %10d sec\n", elapsed)
+  fmt.Printf("Successful requests rate:       %10.0f hits/sec\n", float32(success)/(elapsed/1000.0))
+  fmt.Printf("Read throughput:                %10.0f bytes/sec\n", float32(readThroughput)/(elapsed/1000.0))
+  fmt.Printf("Write throughput:               %10.0f bytes/sec\n", float32(writeThroughput)/(elapsed/1000.0))
+  fmt.Printf("Test time:                      %10.2f sec\n", (elapsed/1000.0))
+}
+
+func printLatency(latencies *hdrhistogram.Histogram) {
+
+      fmt.Println("")
+      shortLatency := tablewriter.NewWriter(os.Stdout)
+      shortLatency.SetRowSeparator("-")
+      shortLatency.SetHeader([]string{
+        "Stat",
+        "2.5%",
+        "50%",
+        "97.5%",
+        "99%",
+        "Avg",
+        "Stdev",
+        "Min",
+        "Max",
+      })
+      shortLatency.SetHeaderColor(tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor},
+        tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor},
+        tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor},
+        tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor},
+        tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor},
+        tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor},
+        tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor},
+        tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor},
+        tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor})
+      shortLatency.Append([]string{
+        chalk.Bold.TextStyle("Latency"),
+        fmt.Sprintf("%v ms", latencies.ValueAtPercentile(2.5)),
+        fmt.Sprintf("%v ms", latencies.ValueAtPercentile(50)),
+        fmt.Sprintf("%v ms", latencies.ValueAtPercentile(97.5)),
+        fmt.Sprintf("%v ms", latencies.ValueAtPercentile(99)),
+        fmt.Sprintf("%.2f ms", latencies.Mean()),
+        fmt.Sprintf("%.2f ms", latencies.StdDev()),
+        fmt.Sprintf("%v ms", latencies.Min()),
+        fmt.Sprintf("%v ms", latencies.Max()),
+      })
+      shortLatency.Render()
+      fmt.Println("")
+
 }
 
 func readLines(path string) (lines []string, err error) {
@@ -265,10 +304,10 @@ func NewConfiguration() *Configuration {
       log.Fatal(err)
     }
     configuration.myClient = &http.Client{ Transport: &http.Transport{
-        Dial: dialFunction,
+        Dial:            dialFunction,
         // huge (times 10) performance improvement when MaxIdleConnsPerHost and MaxIdleConns are configured
         MaxIdleConnsPerHost: clients,
-        MaxIdleConns: 100,
+        MaxIdleConns: clients,
         TLSClientConfig: &tls.Config{
           ServerName: serverAccessName,
           InsecureSkipVerify: insecureSkipVerify,
@@ -278,10 +317,10 @@ func NewConfiguration() *Configuration {
     }
   } else {
     configuration.myClient = &http.Client{ Transport: &http.Transport{
-        Dial: dialFunction,
+        Dial:            dialFunction,
         // huge (times 10) performance improvement when MaxIdleConnsPerHost and MaxIdleConns are configured
         MaxIdleConnsPerHost: clients,
-        MaxIdleConns: 100,
+        MaxIdleConns: clients,
         TLSClientConfig: &tls.Config{
           ServerName: serverAccessName,
           InsecureSkipVerify: insecureSkipVerify,
@@ -343,7 +382,7 @@ func MyDialer() func(address string) (conn net.Conn, err error) {
   }
 }
 
-func client(configuration *Configuration, result *Result, done *sync.WaitGroup, errChan chan error, respChan chan *resp, dumpChan chan string) {
+func client(configuration *Configuration, result *Result, errChan chan error, respChan chan *resp, dumpChan chan string, exitChan chan bool) {
 
   var size int
   var statusCode int
@@ -374,8 +413,8 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup, 
         }
         statusCode = 0
       } else {
-        defer res.Body.Close()
         body, _ := ioutil.ReadAll(res.Body)
+        res.Body.Close()
         if dumpResponse {
           dumpChan <- string(body)
         }
@@ -408,29 +447,29 @@ func client(configuration *Configuration, result *Result, done *sync.WaitGroup, 
     }
   }
 
-  done.Done()
+  exitChan <- true
 }
 
 
 func main() {
 
   startTime := time.Now()
-  var done sync.WaitGroup
-  var maxLatency int64
-  var messageCount int64
   var dumpCount = 5
-  maxLatency = -1
-  messageCount = 0
+  var runningGoroutines int
+  var maxLatency = int64(-1)
+  var messageCount = int64(0)
   results := make(map[int]*Result)
   latencies := hdrhistogram.New(1, 10000, 5)
 
-  signalChannel := make(chan os.Signal, 2)
-  signal.Notify(signalChannel, os.Interrupt)
   flag.Parse()
+
+  signalChan := make(chan os.Signal, 2)
+  signal.Notify(signalChan, os.Interrupt)
 
   respChan := make(chan *resp, 2*clients)
   errChan := make(chan error, 2*clients)
   dumpChan := make(chan string, 2*clients)
+  exitChan := make(chan bool, 2*clients)
 
   configuration := NewConfiguration()
 
@@ -442,15 +481,14 @@ func main() {
 
   fmt.Printf("Dispatching %d clients\n", clients)
 
-  done.Add(clients)
+  runningGoroutines = clients
   for i := 0; i < clients; i++ {
     result := &Result{}
     results[i] = result
-    go client(configuration, result, &done, errChan, respChan, dumpChan)
-
+    go client(configuration, result, errChan, respChan, dumpChan, exitChan)
   }
   fmt.Println("Waiting for results...")
-  for {
+  for runningGoroutines > 0 {
     select {
     case err := <-errChan:
       fmt.Println("Error: ", err.Error())
@@ -461,57 +499,26 @@ func main() {
         if trackMaxLatency {
           if maxLatency < 0 || res.latency > maxLatency {
             maxLatency = res.latency
-            fmt.Println("MaxLatency: message# ", messageCount, " size: ", res.size, "B status:", res.status, " latency:", res.latency, "ms")
+            fmt.Println(messageCount, " size: ", res.size, " status:", res.status, " latency:", res.latency)
           }
         }
       }
     case body := <-dumpChan:
       if dumpCount > 0 {
-        fmt.Println("Dump: ", dumpCount, ": ", body)
+        fmt.Println(dumpCount, ": ", body)
         dumpCount--
       } else {
         dumpResponse = false
       }
-    case _ = <-signalChannel:
-      printResults(results, startTime)
-      fmt.Println("")
-      shortLatency := tablewriter.NewWriter(os.Stdout)
-      shortLatency.SetRowSeparator("-")
-      shortLatency.SetHeader([]string{
-        "Stat",
-        "2.5%",
-        "50%",
-        "97.5%",
-        "99%",
-        "Avg",
-        "Stdev",
-        "Min",
-        "Max",
-      })
-      shortLatency.SetHeaderColor(tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor},
-        tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor},
-        tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor},
-        tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor},
-        tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor},
-        tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor},
-        tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor},
-        tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor},
-        tablewriter.Colors{tablewriter.Bold, tablewriter.FgCyanColor})
-      shortLatency.Append([]string{
-        chalk.Bold.TextStyle("Latency"),
-        fmt.Sprintf("%v ms", latencies.ValueAtPercentile(2.5)),
-        fmt.Sprintf("%v ms", latencies.ValueAtPercentile(50)),
-        fmt.Sprintf("%v ms", latencies.ValueAtPercentile(97.5)),
-        fmt.Sprintf("%v ms", latencies.ValueAtPercentile(99)),
-        fmt.Sprintf("%.2f ms", latencies.Mean()),
-        fmt.Sprintf("%.2f ms", latencies.StdDev()),
-        fmt.Sprintf("%v ms", latencies.Min()),
-        fmt.Sprintf("%v ms", latencies.Max()),
-      })
-      shortLatency.Render()
-      fmt.Println("")
+    case _ = <-exitChan:
+      runningGoroutines--
+    case _ = <-signalChan:
 
-      os.Exit(0)
+
+      runningGoroutines = 0
     }
   }
+  printResults(results, startTime)
+  printLatency(latencies)
+  os.Exit(0)
 }
