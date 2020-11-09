@@ -499,7 +499,7 @@ func main() {
         if trackMaxLatency {
           if maxLatency < 0 || res.latency > maxLatency {
             maxLatency = res.latency
-            fmt.Println(messageCount, " size: ", res.size, " status:", res.status, " latency:", res.latency)
+            fmt.Println(messageCount, " latency:", res.latency, "(ms)")
           }
         }
       }
