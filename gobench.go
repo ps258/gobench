@@ -293,7 +293,7 @@ func NewConfiguration() *Configuration {
     return dialer(targetURL)
   }
 
-  serverAccessName := parseAddress(targetURL)
+  serverAccessName := parseHostname(targetURL)
   if resolve != "" {
     serverAccessName = resolve
   }
@@ -348,6 +348,14 @@ func NewConfiguration() *Configuration {
   configuration.myClient.Timeout = time.Duration(readTimeout) * time.Millisecond
 
   return configuration
+}
+
+func parseHostname(address string) string {
+  u, err := url.Parse(address)
+  if err != nil {
+    log.Fatal(err)
+  }
+  return u.Host
 }
 
 func parseAddress(address string) string {
