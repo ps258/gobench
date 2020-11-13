@@ -305,9 +305,9 @@ func NewConfiguration() *Configuration {
     }
     configuration.myClient = &http.Client{ Transport: &http.Transport{
         Dial:            dialFunction,
-        // huge (times 10) performance improvement when MaxIdleConnsPerHost and MaxIdleConns are configured
         MaxIdleConnsPerHost: clients,
         MaxIdleConns: clients,
+        DisableKeepAlives: ! configuration.keepAlive,
         TLSClientConfig: &tls.Config{
           ServerName: serverAccessName,
           InsecureSkipVerify: insecureSkipVerify,
@@ -318,9 +318,9 @@ func NewConfiguration() *Configuration {
   } else {
     configuration.myClient = &http.Client{ Transport: &http.Transport{
         Dial:            dialFunction,
-        // huge (times 10) performance improvement when MaxIdleConnsPerHost and MaxIdleConns are configured
         MaxIdleConnsPerHost: clients,
         MaxIdleConns: clients,
+        DisableKeepAlives: ! configuration.keepAlive,
         TLSClientConfig: &tls.Config{
           ServerName: serverAccessName,
           InsecureSkipVerify: insecureSkipVerify,
@@ -398,11 +398,8 @@ func client(configuration *Configuration, result *Result, errChan chan error, re
     for _, tmpUrl := range configuration.urls {
 
       req, err := http.NewRequest(configuration.method, tmpUrl, nil)
-      if configuration.keepAlive == true {
-        req.Header.Set("Connection", "keep-alive")
-      } else {
-        req.Header.Set("Connection", "close")
-      }
+      // req.Close is true when keep alives are off. But also set in Transport which seems to do the work
+      req.Close = ! configuration.keepAlive
       if len(configuration.authHeader) > 0 {
         req.Header.Set("Authorization", configuration.authHeader)
       }
@@ -410,13 +407,16 @@ func client(configuration *Configuration, result *Result, errChan chan error, re
         req.Host = hostHeader
       }
 
-      latency := time.Now()
+      requestStartTime := time.Now()
       res, err := configuration.myClient.Get(tmpUrl)
+      requestReplyTime := time.Now()
+      elapsed := int64(requestReplyTime.Sub(requestStartTime) / time.Millisecond)
+
       if err != nil {
         errChan <- err
         respChan <- &resp{
           status:  0,
-          latency: time.Now().Sub(latency).Milliseconds(),
+          latency: elapsed,
           size:    0,
         }
         statusCode = 0
@@ -435,7 +435,7 @@ func client(configuration *Configuration, result *Result, errChan chan error, re
         }
         respChan <- &resp{
           status:  res.StatusCode,
-          latency: time.Now().Sub(latency).Milliseconds(),
+          latency: elapsed,
           size:    size,
         }
         statusCode = res.StatusCode
