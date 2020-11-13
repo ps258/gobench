@@ -13,19 +13,25 @@ Usage
 ================
 
 ```
-Usage of gobench
+Usage of ./gobench:
   -auth string
-        Authorization header
+        Authorization header. Incompatible with -f
   -c int
         Number of concurrent clients (default 100)
   -d string
         HTTP POST data file path
+  -dump
+        Dump a bunch of replies
   -f string
         URL's file path (line seperated)
+  -host string
+        Host header to use (independent of URL). Incompatible with -f
   -k    Do HTTP keep-alive
   -m    Track and report the maximum latency as it occurs
   -r int
         Number of requests per client (default -1)
+  -resolve string
+        Resolve. Like -resolve in curl. Used for the CN/SAN match in a cert. Incompatible with -f
   -s    Skip cert check
   -t int
         Period of time (in seconds) (default -1)
@@ -34,11 +40,11 @@ Usage of gobench
   -tw int
         Write timeout (in milliseconds) (default 5000)
   -u string
-        URL
+        URL. Incompatible with -f
   -x string
-        File name of certificate for MATLS
+        Certificate for MATLS
   -y string
-        File name of key to certificate for MATLS
+        Key to certificate for MATLS
 ```
 
 
@@ -46,7 +52,10 @@ Notes
 ================
 
 1. I've probably broken stuff, particularly features that I don't use
-2. This uses https://github.com/valyala/fasthttp which gets improbably good results compared to net/http so I worry its cutting too many corners
+2. I've converted it to standard net/http which gives similar rates to other benchmarking tools
+3. I've added a way to attach certificates to do mTLS
+4. -resolve allows you to connect to a server which has a certificate DN which doesn't match the URL used to connect
+
 
 Help
 ================
