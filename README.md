@@ -5,9 +5,12 @@ This is a fork of https://github.com/cmpxchg16/gobench which doesn't seem to be 
 
 Differences
 ================
-  * Fixed a bug in -k that left it on by default. -k now enables keep alives and not specifying -k turns them off
+  * Made it simpler to turn off keep alives. -k == keep alives, no -k == no keep alives
   * Added -s to allow acceptance of self signed certificates
   * Added -x and -y so that a certificate and key can be used to test APIs protected by MATLS
+  * Converted it to standard net/http which gives similar rates to other benchmarking tools
+  * Added a way to attach certificates to do mTLS
+  * Added -resolve which allows you to connect to a server which has a certificate DN which doesn't match the URL used to connect
 
 Usage
 ================
@@ -52,9 +55,6 @@ Notes
 ================
 
 1. I've probably broken stuff, particularly features that I don't use
-2. I've converted it to standard net/http which gives similar rates to other benchmarking tools
-3. I've added a way to attach certificates to do mTLS
-4. -resolve allows you to connect to a server which has a certificate DN which doesn't match the URL used to connect
 
 
 Help
