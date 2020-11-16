@@ -9,7 +9,6 @@ Differences
   * Added -s to allow acceptance of self signed certificates
   * Added -x and -y so that a certificate and key can be used to test APIs protected by MATLS
   * Converted it to standard net/http which gives similar rates to other benchmarking tools
-  * Added a way to attach certificates to do mTLS
   * Added -resolve which allows you to connect to a server which has a certificate DN which doesn't match the URL used to connect
 
 Usage
