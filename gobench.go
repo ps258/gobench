@@ -293,9 +293,9 @@ func NewConfiguration() *Configuration {
 		return dialer(targetURL)
 	}
 
-	serverAccessName := parseHostname(targetURL)
+	certificateExpectedName := parseHostname(targetURL)
 	if resolve != "" {
-		serverAccessName = resolve
+		certificateExpectedName = resolve
 	}
 
 	if mtlsCertFile != "" {
@@ -309,7 +309,7 @@ func NewConfiguration() *Configuration {
 			MaxIdleConns:        clients,
 			DisableKeepAlives:   !configuration.keepAlive,
 			TLSClientConfig: &tls.Config{
-				ServerName:         serverAccessName,
+				ServerName:         certificateExpectedName,
 				InsecureSkipVerify: insecureSkipVerify,
 				Certificates:       []tls.Certificate{cert},
 			},
@@ -322,7 +322,7 @@ func NewConfiguration() *Configuration {
 			MaxIdleConns:        clients,
 			DisableKeepAlives:   !configuration.keepAlive,
 			TLSClientConfig: &tls.Config{
-				ServerName:         serverAccessName,
+				ServerName:         certificateExpectedName,
 				InsecureSkipVerify: insecureSkipVerify,
 			},
 		},
