@@ -298,36 +298,30 @@ func NewConfiguration() *Configuration {
 		certificateExpectedName = resolve
 	}
 
+  var cert tls.Certificate
+  var err error
 	if mtlsCertFile != "" {
-		cert, err := tls.LoadX509KeyPair(mtlsCertFile, mtlsKeyFile)
+    cert, err = tls.LoadX509KeyPair(mtlsCertFile, mtlsKeyFile)
 		if err != nil {
 			log.Fatal(err)
 		}
-		configuration.myClient = &http.Client{Transport: &http.Transport{
-			Dial:                dialFunction,
-			MaxIdleConnsPerHost: clients,
-			MaxIdleConns:        clients,
-			DisableKeepAlives:   !configuration.keepAlive,
-			TLSClientConfig: &tls.Config{
-				ServerName:         certificateExpectedName,
-				InsecureSkipVerify: insecureSkipVerify,
-				Certificates:       []tls.Certificate{cert},
-			},
-		},
-		}
-	} else {
-		configuration.myClient = &http.Client{Transport: &http.Transport{
-			Dial:                dialFunction,
-			MaxIdleConnsPerHost: clients,
-			MaxIdleConns:        clients,
-			DisableKeepAlives:   !configuration.keepAlive,
-			TLSClientConfig: &tls.Config{
-				ServerName:         certificateExpectedName,
-				InsecureSkipVerify: insecureSkipVerify,
-			},
-		},
-		}
-	}
+  } else {
+    cert = tls.Certificate{}
+  }
+
+  configuration.myClient = &http.Client{
+    Transport: &http.Transport{
+      Dial:                dialFunction,
+      MaxIdleConnsPerHost: clients,
+      MaxIdleConns:        clients,
+      DisableKeepAlives:   !configuration.keepAlive,
+      TLSClientConfig: &tls.Config{
+        ServerName:         certificateExpectedName,
+        InsecureSkipVerify: insecureSkipVerify,
+        Certificates:       []tls.Certificate{cert},
+      },
+    },
+  }
 
 	if targetURL != "" {
 		configuration.urls = append(configuration.urls, targetURL)
