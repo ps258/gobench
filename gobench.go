@@ -41,6 +41,7 @@ var (
 	hostHeader         string
 	resolve            string
 	dumpResponse       bool
+  cipherSuite        string
 )
 
 type Configuration struct {
@@ -70,6 +71,7 @@ type resp struct {
 
 var readThroughput int64
 var writeThroughput int64
+var cipherSuiteID uint16
 
 type MyConn struct {
 	net.Conn
@@ -95,6 +97,33 @@ func (this *MyConn) Write(b []byte) (n int, err error) {
 	return len, err
 }
 
+func checkCipherSuiteName(cipherName string) (bool, uint16) {
+  //takes a string and checks for a match in all names
+  for _, c := range tls.CipherSuites() {
+    if cipherName == c.Name {
+      //fmt.Println("[Secure]Found", c.Name)
+      return true, c.ID
+    }
+  }
+  for _, c := range tls.InsecureCipherSuites() {
+    if cipherName == c.Name {
+      //fmt.Println("[Insecure]Found", c.Name)
+      return true, c.ID
+    }
+  }
+  return false, uint16(0)
+}
+
+func printCipherSuiteNames() {
+  //takes a string and checks for a match in all names
+  for _, c := range tls.CipherSuites() {
+    fmt.Println("Secure", c.Name)
+  }
+  for _, c := range tls.InsecureCipherSuites() {
+    fmt.Println("Insecure", c.Name)
+  }
+}
+
 func init() {
 	flag.Int64Var(&requests, "r", -1, "Number of requests per client")
 	flag.IntVar(&clients, "c", 100, "Number of concurrent clients")
@@ -113,6 +142,7 @@ func init() {
 	flag.StringVar(&hostHeader, "host", "", "Host header to use (independent of URL). Incompatible with -f")
 	flag.StringVar(&resolve, "resolve", "", "Resolve. Like -resolve in curl. Used for the CN/SAN match in a cert. Incompatible with -f")
 	flag.BoolVar(&dumpResponse, "dump", false, "Dump a bunch of replies")
+	flag.StringVar(&cipherSuite, "cipher", "", "TLS Cipher Suite to use in connection")
 }
 
 func printResults(results map[int]*Result, startTime time.Time) {
@@ -309,6 +339,11 @@ func NewConfiguration() *Configuration {
 		cert = tls.Certificate{}
 	}
 
+  var cipherSuites []uint16
+  if cipherSuite != "" {
+    cipherSuites = append(cipherSuites, cipherSuiteID)
+  }
+
 	configuration.myClient = &http.Client{
 		Transport: &http.Transport{
 			Dial:                dialFunction,
@@ -319,6 +354,7 @@ func NewConfiguration() *Configuration {
 				ServerName:         certificateExpectedName,
 				InsecureSkipVerify: insecureSkipVerify,
 				Certificates:       []tls.Certificate{cert},
+        CipherSuites:       cipherSuites,
 			},
 		},
 	}
@@ -459,10 +495,19 @@ func main() {
 	var runningGoroutines int
 	var maxLatency = int64(-1)
 	var messageCount = int64(0)
+  var ok bool
 	results := make(map[int]*Result)
 	latencies := hdrhistogram.New(1, 10000, 5)
 
 	flag.Parse()
+  if cipherSuite != "" {
+    if ok, cipherSuiteID = checkCipherSuiteName(cipherSuite); !ok {
+      fmt.Println("Error: Unknown cipher suite:", cipherSuite)
+      fmt.Println("Valid suites:")
+      printCipherSuiteNames()
+      os.Exit(1)
+    }
+  }
 
 	signalChan := make(chan os.Signal, 2)
 	signal.Notify(signalChan, os.Interrupt)
