@@ -20,6 +20,8 @@ Usage of ./gobench:
         Authorization header. Incompatible with -f
   -c int
         Number of concurrent clients (default 100)
+  -cipher string
+        TLS Cipher Suite to use in connection
   -d string
         HTTP POST data file path
   -dump
