@@ -438,7 +438,7 @@ func client(configuration *Configuration, result *Result, errChan chan error, re
 			}
 
 			requestStartTime := time.Now()
-			res, err := configuration.myClient.Get(tmpUrl)
+			res, err := configuration.myClient.Do(req)
 			requestReplyTime := time.Now()
 			elapsed := int64(requestReplyTime.Sub(requestStartTime) / time.Millisecond)
 
